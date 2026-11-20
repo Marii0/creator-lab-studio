@@ -44,16 +44,16 @@ body{margin:0}
     try { sessionStorage.setItem("cls.st", JSON.stringify({ s:st, h:location.hash, silent:!!o.silent })); } catch (e) {}
     var cfg = lsGet(GDK) || {};
     var u = "https://accounts.google.com/o/oauth2/v2/auth?client_id=" + encodeURIComponent(CID) + "&redirect_uri=" + encodeURIComponent(HOME) + "&response_type=token&scope=" + encodeURIComponent(SCOPE) + "&include_granted_scopes=true&state=" + st;
-    if (o.pick) u += "&prompt=" + encodeURIComponent(o.choose ? "consent select_account" : "consent") + "&trigger_onepick=true&allow_multiple=true&file_ids=" + encodeURIComponent(o.pick.join(","));
+    if (o.pick) u += "&prompt=" + encodeURIComponent(o.choose ? "consent select_account" : "consent") + "&trigger_onepick=true&file_ids=" + encodeURIComponent(o.pick.join(","));
     else if (o.silent) u += "&prompt=none"; else if (o.choose) u += "&prompt=select_account";
     if (cfg.mail && !o.choose) u += "&login_hint=" + encodeURIComponent(cfg.mail);
     if (o.silent) location.replace(u); else location.assign(u);
   }
-  // Enlace de invitación: #join=<id de la app>.<id de los datos>
+  // Enlace de invitación: #join=<id de la app>. Solo se comparte la app; cada cuenta guarda sus datos en su Drive.
   (function invite() {
-    var m = location.hash.match(/^#join=([\w-]{10,})\.([\w-]{10,})$/);
+    var m = location.hash.match(/^#join=([\w-]{10,})(?:\.[\w-]{10,})?$/);
     if (!m) return;
-    lsSet(JOIN, { b:m[1], d:m[2] });
+    lsSet(JOIN, { b:m[1] });
     try { history.replaceState(null, "", location.pathname); } catch (e) { location.hash = ""; }
   })();
   (function back() {
@@ -90,16 +90,17 @@ body{margin:0}
     }, function () { throw Object.assign(new Error("Sin conexión con Drive"), { net:true }); });
   }
   function q(query) {
-    return gfetch(API + "?spaces=drive&pageSize=20&orderBy=" + encodeURIComponent("modifiedTime desc") + "&fields=" + encodeURIComponent("files(id,name,appProperties)") + "&q=" + encodeURIComponent(query)).then(function (r) { return r.json(); }).then(function (j) { return j.files || []; });
+    return gfetch(API + "?spaces=drive&pageSize=20&orderBy=" + encodeURIComponent("modifiedTime desc") + "&fields=" + encodeURIComponent("files(id,name,appProperties,ownedByMe)") + "&q=" + encodeURIComponent(query)).then(function (r) { return r.json(); }).then(function (j) { return j.files || []; });
   }
   function buildOf(code) { var m = code.slice(0, 60).match(/^\/\*CLS-BUNDLE build=(\d+)\*\//); return m ? Number(m[1]) : 0; }
   function bundleId() { var c = lsGet(GDK) || {}; return c.bundleId || ""; }
   async function fromDrive(id) {
-    id = id || bundleId();
-    if (!id) { var f = await q("name='" + BN + "' and trashed=false"); if (!f.length) return null; id = f[0].id; }
+    id = id || bundleId(); var own;
+    if (!id) { var f = await q("name='" + BN + "' and trashed=false"); if (!f.length) return null; id = f[0].id; own = f[0].ownedByMe; }
+    else own = (await (await gfetch(API + "/" + id + "?fields=ownedByMe")).json()).ownedByMe;
     var code = await (await gfetch(API + "/" + id + "?alt=media")).text();
     var b = buildOf(code); if (!b) return null;
-    return { code:code, build:b, id:id };
+    return { code:code, build:b, id:id, mine:own !== false };
   }
   async function toDrive(file) {
     var code = await file.text(), b = buildOf(code);
@@ -107,7 +108,7 @@ body{margin:0}
     var known = bundleId(), f = known ? [{ id:known }] : await q("name='" + BN + "' and trashed=false"), meta = { appProperties:{ build:String(b) } }, path = "", method = "POST";
     if (f.length) { path = "/" + f[0].id; method = "PATCH"; }
     else {
-      var d = await q("name='" + DIR + "' and trashed=false and mimeType='application/vnd.google-apps.folder'"), dir = d.length ? d[0].id : null;
+      var d = await q("name='" + DIR + "' and trashed=false and 'me' in owners and mimeType='application/vnd.google-apps.folder'"), dir = d.length ? d[0].id : null;
       if (!dir) dir = (await (await gfetch(API + "?fields=id", { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify({ name:DIR, mimeType:"application/vnd.google-apps.folder" }) })).json()).id;
       meta.name = BN; meta.mimeType = "text/javascript"; meta.parents = [dir];
     }
@@ -137,8 +138,8 @@ body{margin:0}
   }
   function showJoin(msg) {
     var j = lsGet(JOIN);
-    show("<p>Te invitaron a usar esta app. Conecta <b>tu</b> cuenta de Google.</p><p class=\"sub\">Google te va a mostrar dos archivos (" + BN + " y creatorlab-datos.json): <b>selecciona los dos</b> y toca <b>Insert</b> (Insertar). Antes, Google avisa que la app está en pruebas: toca <b>Continue</b> y luego <b>Allow access</b>.</p>" + (msg ? '<p class="err">' + esc(msg) + "</p>" : "") + '<button id="g-join">Conectar con Google</button><p class="sub"><a href="#" id="g-nojoin">No es una invitación: entrar con mi propia cuenta</a></p>');
-    document.getElementById("g-join").onclick = function () { start({ pick:[j.b, j.d], choose:true }); };
+    show("<p>Te invitaron a usar esta app. Conecta <b>tu</b> cuenta de Google.</p><p class=\"sub\">Google avisa que la app está en pruebas: toca <b>Continue</b> y luego <b>Allow access</b>. Después te muestra un archivo (" + BN + "): <b>selecciónalo</b> y toca el botón azul (<b>Select</b> o Insert).</p><p class=\"sub\">Solo compartes la app. Tus nichos, videos e ideas se guardan en tu propio Drive y nadie más los ve.</p>" + (msg ? '<p class="err">' + esc(msg) + "</p>" : "") + '<button id="g-join">Conectar con Google</button><p class="sub"><a href="#" id="g-nojoin">No es una invitación: entrar con mi propia cuenta</a></p>');
+    document.getElementById("g-join").onclick = function () { start({ pick:[j.b], choose:true }); };
     document.getElementById("g-nojoin").onclick = function (e) { e.preventDefault(); try { localStorage.removeItem(JOIN); } catch (x) {} if (token()) install(); else showConnect(""); };
   }
   async function installJoin(j) {
@@ -146,22 +147,21 @@ body{margin:0}
     try {
       var mail = await whoami(), b = await fromDrive(j.b);
       if (!b) throw new Error("El archivo compartido no es la app");
-      await gfetch(API + "/" + j.d + "?fields=id");
-      var c = lsGet(GDK) || {}; c.on = true; c.joined = true; c.bundleId = j.b; c.fileId = j.d; c.synced = 0; c.mail = mail || c.mail || ""; lsSet(GDK, c);
+      var c = lsGet(GDK) || {}; c.on = true; c.joined = !b.mine; c.bundleId = j.b; c.mail = mail || c.mail || ""; lsSet(GDK, c);
       try { localStorage.removeItem(JOIN); } catch (x) {}
       await idbSet("bundle", { code:b.code, build:b.build }); run(b);
     } catch (e) {
       if (e && e.auth) return showJoin("");
-      showJoin(e && (e.status === 404 || e.status === 403) ? "Tu cuenta todavía no puede abrir esos archivos. Revisa que te hayan compartido la carpeta con este correo y que hayas seleccionado los dos archivos en la pantalla de Google." : (e && e.message) || "No se pudo abrir");
+      showJoin(e && (e.status === 404 || e.status === 403) ? "Tu cuenta todavía no puede abrir la app. Revisa que te la hayan compartido con este correo y que hayas seleccionado el archivo en la pantalla de Google." : (e && e.message) || "No se pudo abrir");
     }
   }
   async function install() {
     var j = lsGet(JOIN);
-    if (j && j.b && j.d) return installJoin(j);
+    if (j && j.b) return installJoin(j);
     show("<p>Cargando la app desde tu Drive…</p>");
     try {
       var mail = await whoami(), b = await fromDrive();
-      if (b) { var c = lsGet(GDK) || {}; c.on = true; c.bundleId = b.id; lsSet(GDK, c); await idbSet("bundle", { code:b.code, build:b.build }); return run(b); }
+      if (b) { var c = lsGet(GDK) || {}; c.on = true; c.bundleId = b.id; c.joined = !b.mine; lsSet(GDK, c); await idbSet("bundle", { code:b.code, build:b.build }); return run(b); }
       show("<p>Entraste como <b>" + esc(mail || "tu cuenta") + '</b>, pero en ese Drive no está la app.</p><button id="g-other">Usar otra cuenta</button><details><summary>Es la primera instalación</summary><p class="sub">Elige el archivo <b>' + BN + '</b> y se guarda en tu Drive para todos tus dispositivos.</p><input type="file" id="g-file" accept=".js,text/javascript"><p class="err" id="g-msg"></p></details>');
       document.getElementById("g-other").onclick = function () { start({ choose:true }); };
       document.getElementById("g-file").onchange = function () {
