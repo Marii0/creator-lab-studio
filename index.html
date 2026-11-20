@@ -25,7 +25,7 @@ body{margin:0}
 (function () {
   "use strict";
   var CID = "314576804335-gfd382ocr6pnhtevof63bk153dkvpjcd.apps.googleusercontent.com", SCOPE = "https://www.googleapis.com/auth/drive.file";
-  var K = "creatorlab.studio.v1", GDK = K + ".gd", GDT = K + ".gdtok", SIL = K + ".silent";
+  var K = "creatorlab.studio.v1", GDK = K + ".gd", GDT = K + ".gdtok", SIL = K + ".silent", JOIN = K + ".join";
   var API = "https://www.googleapis.com/drive/v3/files", UP = "https://www.googleapis.com/upload/drive/v3/files";
   var BN = "creatorlab-app.js", DIR = "Creator Lab Studio", MARK = "/*CLS-BUNDLE build=";
   var HOME = location.origin + location.pathname.replace(/index\.html$/, "");
@@ -44,14 +44,24 @@ body{margin:0}
     try { sessionStorage.setItem("cls.st", JSON.stringify({ s:st, h:location.hash, silent:!!o.silent })); } catch (e) {}
     var cfg = lsGet(GDK) || {};
     var u = "https://accounts.google.com/o/oauth2/v2/auth?client_id=" + encodeURIComponent(CID) + "&redirect_uri=" + encodeURIComponent(HOME) + "&response_type=token&scope=" + encodeURIComponent(SCOPE) + "&include_granted_scopes=true&state=" + st;
-    if (o.silent) u += "&prompt=none"; else if (o.choose) u += "&prompt=select_account";
+    if (o.pick) u += "&prompt=" + encodeURIComponent(o.choose ? "consent select_account" : "consent") + "&trigger_onepick=true&allow_multiple=true&file_ids=" + encodeURIComponent(o.pick.join(","));
+    else if (o.silent) u += "&prompt=none"; else if (o.choose) u += "&prompt=select_account";
     if (cfg.mail && !o.choose) u += "&login_hint=" + encodeURIComponent(cfg.mail);
     if (o.silent) location.replace(u); else location.assign(u);
   }
+  // Enlace de invitación: #join=<id de la app>.<id de los datos>
+  (function invite() {
+    var m = location.hash.match(/^#join=([\w-]{10,})\.([\w-]{10,})$/);
+    if (!m) return;
+    lsSet(JOIN, { b:m[1], d:m[2] });
+    try { history.replaceState(null, "", location.pathname); } catch (e) { location.hash = ""; }
+  })();
   (function back() {
-    var h = location.hash;
-    if (!/[#&](access_token|error)=/.test(h)) return;
+    var h = location.hash, qs = new URLSearchParams(location.search);
+    if (!/[#&](access_token|error)=/.test(h) && !qs.get("error")) return;
     var p = new URLSearchParams(h.slice(1)), saved = null;
+    qs.forEach(function (v, k) { if (!p.has(k)) p.set(k, v); });
+    if (p.get("picked_file_ids")) lsSet(K + ".picked", p.get("picked_file_ids"));
     try { saved = JSON.parse(sessionStorage.getItem("cls.st") || "null"); sessionStorage.removeItem("cls.st"); } catch (e) {}
     var ok = saved && saved.s && saved.s === p.get("state");
     if (!ok) authErr = "state";
@@ -60,7 +70,7 @@ body{margin:0}
       else lsSet(GDT, { t:p.get("access_token"), exp:Date.now() + (Number(p.get("expires_in")) || 3600) * 1000 });
     } else authErr = saved.silent ? "silent" : (p.get("error") || "error");
     var keep = saved && saved.h && !/[#&](access_token|error)=/.test(saved.h) ? saved.h : "";
-    try { history.replaceState(null, "", location.pathname + location.search + keep); } catch (e) { location.hash = keep; }
+    try { history.replaceState(null, "", location.pathname + keep); } catch (e) { location.hash = keep; }
   })();
   function reachable() {
     return new Promise(function (res) {
@@ -83,17 +93,18 @@ body{margin:0}
     return gfetch(API + "?spaces=drive&pageSize=20&orderBy=" + encodeURIComponent("modifiedTime desc") + "&fields=" + encodeURIComponent("files(id,name,appProperties)") + "&q=" + encodeURIComponent(query)).then(function (r) { return r.json(); }).then(function (j) { return j.files || []; });
   }
   function buildOf(code) { var m = code.slice(0, 60).match(/^\/\*CLS-BUNDLE build=(\d+)\*\//); return m ? Number(m[1]) : 0; }
-  async function fromDrive() {
-    var f = await q("name='" + BN + "' and trashed=false");
-    if (!f.length) return null;
-    var code = await (await gfetch(API + "/" + f[0].id + "?alt=media")).text();
+  function bundleId() { var c = lsGet(GDK) || {}; return c.bundleId || ""; }
+  async function fromDrive(id) {
+    id = id || bundleId();
+    if (!id) { var f = await q("name='" + BN + "' and trashed=false"); if (!f.length) return null; id = f[0].id; }
+    var code = await (await gfetch(API + "/" + id + "?alt=media")).text();
     var b = buildOf(code); if (!b) return null;
-    return { code:code, build:b, id:f[0].id };
+    return { code:code, build:b, id:id };
   }
   async function toDrive(file) {
     var code = await file.text(), b = buildOf(code);
     if (!b) throw new Error("Ese archivo no es la app (debe ser " + BN + ")");
-    var f = await q("name='" + BN + "' and trashed=false"), meta = { appProperties:{ build:String(b) } }, path = "", method = "POST";
+    var known = bundleId(), f = known ? [{ id:known }] : await q("name='" + BN + "' and trashed=false"), meta = { appProperties:{ build:String(b) } }, path = "", method = "POST";
     if (f.length) { path = "/" + f[0].id; method = "PATCH"; }
     else {
       var d = await q("name='" + DIR + "' and trashed=false and mimeType='application/vnd.google-apps.folder'"), dir = d.length ? d[0].id : null;
@@ -102,7 +113,8 @@ body{margin:0}
     }
     var bd = "clab" + Math.random().toString(36).slice(2) + Date.now().toString(36);
     var body = "--" + bd + "\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n" + JSON.stringify(meta) + "\r\n--" + bd + "\r\nContent-Type: text/javascript; charset=UTF-8\r\n\r\n" + code + "\r\n--" + bd + "--";
-    await gfetch(UP + path + "?uploadType=multipart&fields=id", { method:method, headers:{ "Content-Type":"multipart/related; boundary=" + bd }, body:body });
+    var id = (await (await gfetch(UP + path + "?uploadType=multipart&fields=id", { method:method, headers:{ "Content-Type":"multipart/related; boundary=" + bd }, body:body })).json()).id;
+    var c = lsGet(GDK) || {}; c.bundleId = id; lsSet(GDK, c);
     await idbSet("bundle", { code:code, build:b });
     return { code:code, build:b };
   }
@@ -123,11 +135,33 @@ body{margin:0}
     show('<p>Esta app es privada. Conecta la cuenta de Google donde está guardada.</p>' + (msg ? '<p class="err">' + esc(msg) + "</p>" : "") + '<button id="g-connect">Conectar con Google</button><p class="sub">Solo puede ver los archivos que ella misma crea en tu Drive.</p>');
     document.getElementById("g-connect").onclick = function () { start({}); };
   }
+  function showJoin(msg) {
+    var j = lsGet(JOIN);
+    show("<p>Te invitaron a usar esta app. Conecta <b>tu</b> cuenta de Google.</p><p class=\"sub\">Google te va a mostrar dos archivos (" + BN + " y creatorlab-datos.json): <b>selecciona los dos</b> y confirma. Así la app puede abrir lo que te compartieron.</p>" + (msg ? '<p class="err">' + esc(msg) + "</p>" : "") + '<button id="g-join">Conectar con Google</button><p class="sub"><a href="#" id="g-nojoin">No es una invitación: entrar con mi propia cuenta</a></p>');
+    document.getElementById("g-join").onclick = function () { start({ pick:[j.b, j.d], choose:true }); };
+    document.getElementById("g-nojoin").onclick = function (e) { e.preventDefault(); try { localStorage.removeItem(JOIN); } catch (x) {} if (token()) install(); else showConnect(""); };
+  }
+  async function installJoin(j) {
+    show("<p>Abriendo la app que te compartieron…</p>");
+    try {
+      var mail = await whoami(), b = await fromDrive(j.b);
+      if (!b) throw new Error("El archivo compartido no es la app");
+      await gfetch(API + "/" + j.d + "?fields=id");
+      var c = lsGet(GDK) || {}; c.on = true; c.joined = true; c.bundleId = j.b; c.fileId = j.d; c.synced = 0; c.mail = mail || c.mail || ""; lsSet(GDK, c);
+      try { localStorage.removeItem(JOIN); } catch (x) {}
+      await idbSet("bundle", { code:b.code, build:b.build }); run(b);
+    } catch (e) {
+      if (e && e.auth) return showJoin("");
+      showJoin(e && (e.status === 404 || e.status === 403) ? "Tu cuenta todavía no puede abrir esos archivos. Revisa que te hayan compartido la carpeta con este correo y que hayas seleccionado los dos archivos en la pantalla de Google." : (e && e.message) || "No se pudo abrir");
+    }
+  }
   async function install() {
+    var j = lsGet(JOIN);
+    if (j && j.b && j.d) return installJoin(j);
     show("<p>Cargando la app desde tu Drive…</p>");
     try {
       var mail = await whoami(), b = await fromDrive();
-      if (b) { var c = lsGet(GDK) || {}; c.on = true; lsSet(GDK, c); await idbSet("bundle", { code:b.code, build:b.build }); return run(b); }
+      if (b) { var c = lsGet(GDK) || {}; c.on = true; c.bundleId = b.id; lsSet(GDK, c); await idbSet("bundle", { code:b.code, build:b.build }); return run(b); }
       show("<p>Entraste como <b>" + esc(mail || "tu cuenta") + '</b>, pero en ese Drive no está la app.</p><button id="g-other">Usar otra cuenta</button><details><summary>Es la primera instalación</summary><p class="sub">Elige el archivo <b>' + BN + '</b> y se guarda en tu Drive para todos tus dispositivos.</p><input type="file" id="g-file" accept=".js,text/javascript"><p class="err" id="g-msg"></p></details>');
       document.getElementById("g-other").onclick = function () { start({ choose:true }); };
       document.getElementById("g-file").onchange = function () {
@@ -142,8 +176,9 @@ body{margin:0}
   }
   async function check(b) {
     try {
-      var f = await q("name='" + BN + "' and trashed=false");
+      var known = bundleId(), f = known ? [await (await gfetch(API + "/" + known + "?fields=" + encodeURIComponent("id,appProperties"))).json()] : await q("name='" + BN + "' and trashed=false");
       if (!f.length || !(Number(f[0].appProperties && f[0].appProperties.build) > b.build)) return;
+      if (!known) { var c0 = lsGet(GDK) || {}; c0.bundleId = f[0].id; lsSet(GDK, c0); }
       var nb = await fromDrive(); if (!nb || nb.build <= b.build) return;
       await idbSet("bundle", { code:nb.code, build:nb.build });
       var t = document.createElement("div"); t.id = "cls-upd";
@@ -154,7 +189,7 @@ body{margin:0}
     } catch (e) {}
   }
   window.CLS = {
-    home:HOME, build:0, authErr:authErr, token:token, start:start,
+    home:HOME, build:0, authErr:authErr, token:token, start:start, bundleId:bundleId,
     updateBundle:function (file) { return toDrive(file); },
     forget:function () {
       try { Object.keys(localStorage).forEach(function (k) { if (k.indexOf(K) === 0) localStorage.removeItem(k); }); } catch (e) {}
@@ -170,6 +205,7 @@ body{margin:0}
     }
     if (b && b.code) { run(b); if (token()) check(b); return; }
     if (token()) return install();
+    if (lsGet(JOIN)) return showJoin(authErr === "access_denied" ? "No se dio el permiso en Google." : "");
     showConnect(authErr === "access_denied" ? "No se dio el permiso en Google." : authErr && authErr !== "silent" ? "Google no completó el acceso (" + authErr + ")." : "");
   })();
 })();

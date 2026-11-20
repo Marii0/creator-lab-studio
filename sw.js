@@ -1,4 +1,4 @@
-// Creator Lab Studio: red primero, copia guardada si no hay internet. build 1795191059
+// Creator Lab Studio: red primero, copia guardada si no hay internet. build 1795193451
 const C = "cls-v1";
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", e => e.waitUntil(self.clients.claim()));
