@@ -137,7 +137,7 @@ body{margin:0}
   }
   function showJoin(msg) {
     var j = lsGet(JOIN);
-    show("<p>Te invitaron a usar esta app. Conecta <b>tu</b> cuenta de Google.</p><p class=\"sub\">Google te va a mostrar dos archivos (" + BN + " y creatorlab-datos.json): <b>selecciona los dos</b> y confirma. Así la app puede abrir lo que te compartieron.</p>" + (msg ? '<p class="err">' + esc(msg) + "</p>" : "") + '<button id="g-join">Conectar con Google</button><p class="sub"><a href="#" id="g-nojoin">No es una invitación: entrar con mi propia cuenta</a></p>');
+    show("<p>Te invitaron a usar esta app. Conecta <b>tu</b> cuenta de Google.</p><p class=\"sub\">Google te va a mostrar dos archivos (" + BN + " y creatorlab-datos.json): <b>selecciona los dos</b> y toca <b>Insert</b> (Insertar). Antes, Google avisa que la app está en pruebas: toca <b>Continue</b> y luego <b>Allow access</b>.</p>" + (msg ? '<p class="err">' + esc(msg) + "</p>" : "") + '<button id="g-join">Conectar con Google</button><p class="sub"><a href="#" id="g-nojoin">No es una invitación: entrar con mi propia cuenta</a></p>');
     document.getElementById("g-join").onclick = function () { start({ pick:[j.b, j.d], choose:true }); };
     document.getElementById("g-nojoin").onclick = function (e) { e.preventDefault(); try { localStorage.removeItem(JOIN); } catch (x) {} if (token()) install(); else showConnect(""); };
   }
